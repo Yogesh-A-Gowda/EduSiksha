@@ -61,8 +61,3 @@ CHROMA_DB_URL="http://localhost:8000"
 RAZORPAY_KEY_ID="your-key"
 RAZORPAY_KEY_SECRET="your-secret"
 ```
-
-## 📚 Documentation
-
-*   [Deployment Guide](DEPLOYMENT.md): Instructions for distributed server setup (AI vs DB vs App).
-*   [Task List](task.md): Project roadmap and progress.
