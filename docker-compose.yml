@@ -1,0 +1,39 @@
+services:
+  # 1. Redis (Cache & Message Broker)
+  # We still run this locally because Managed Redis is expensive.
+  redis:
+    image: redis:alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+
+  # 2. API Server
+  api:
+    build: ./backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      # CONNECT TO NEON DB HERE
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      - redis
+
+  # 3. Background Worker
+  # If this crashes, the API keeps working (and vice versa).
+  worker:
+    build: ./backend
+    restart: always
+    command: node worker.js
+    environment:
+      # CONNECT TO NEON DB HERE TOO
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    depends_on:
+      - redis
