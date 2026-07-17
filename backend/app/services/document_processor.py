@@ -18,16 +18,22 @@ from docx import Document
 # If Tesseract is not in PATH, set it here:
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
+OCR_LANG = "eng+hin+kan"  # requires tesseract-ocr-hin and tesseract-ocr-kan packages
+
+
+def _ocr_image(image) -> str:
+    """Run Tesseract with multilingual support, falling back to English-only."""
+    try:
+        return pytesseract.image_to_string(image, lang=OCR_LANG)
+    except Exception:
+        return pytesseract.image_to_string(image, lang='eng')
+
+
 def extract_text_from_image(image_path: str) -> str:
-    """
-    Extract text from image using Tesseract OCR
-    Supports: PNG, JPG, JPEG, BMP, TIFF
-    """
+    """Extract text from image using Tesseract OCR. Supports PNG, JPG, JPEG, BMP, TIFF."""
     try:
         image = Image.open(image_path)
-        # Use English by default, can add more languages: lang='eng+hin+kan'
-        text = pytesseract.image_to_string(image, lang='eng')
-        return text.strip()
+        return _ocr_image(image).strip()
     except Exception as e:
         print(f"Image OCR Error: {e}")
         return ""
@@ -48,13 +54,11 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         
         # If very little text extracted, likely a scanned PDF - use OCR
         if len(text.strip()) < 100:
-            print(f"PDF appears to be scanned, using OCR...")
             try:
                 images = convert_from_path(pdf_path, dpi=300)
                 text = ""
                 for i, image in enumerate(images):
-                    print(f"OCR processing page {i+1}/{len(images)}...")
-                    text += pytesseract.image_to_string(image, lang='eng') + "\n"
+                    text += _ocr_image(image) + "\n"
             except Exception as ocr_error:
                 print(f"PDF OCR Error: {ocr_error}")
                 # Return whatever text we got from initial extraction

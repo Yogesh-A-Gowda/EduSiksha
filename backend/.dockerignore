@@ -1,0 +1,26 @@
+# Never bake secrets into the image
+.env
+.env.*
+!.env.example
+
+# Dev environments
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Runtime data — mount as Docker volumes in production
+uploads/
+static/reports/
+
+# Version control and editor noise
+.git
+.gitignore
+.vscode/
+.idea/
+
+# Docs and local scripts that don't belong in the image
+*.md
+tests/
+*.log

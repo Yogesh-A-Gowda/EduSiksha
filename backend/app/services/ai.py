@@ -1,15 +1,11 @@
 import os
-import requests
 from datetime import datetime, timedelta
 from typing import List
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from ..db.models import Message, Document
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from ..db.models import Message, Document, ChatSession
+from ..core.logger import get_logger
 from pgvector.sqlalchemy import Vector
 from dotenv import load_dotenv
-# ... imports ...
 from groq import Groq
 from sentence_transformers import SentenceTransformer
 
@@ -17,6 +13,12 @@ from sentence_transformers import SentenceTransformer
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY)
+
+# Cosine distance threshold: 0 = identical vectors, 2 = opposite.
+# Chunks with distance >= this value are not relevant enough to inject as context.
+# 0.5 means roughly >50% cosine similarity — tune up (stricter) or down (looser) as needed.
+RAG_DISTANCE_THRESHOLD = float(os.getenv("RAG_DISTANCE_THRESHOLD", "0.5"))
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "2"))
 
 # Initialize Local Embedding Model (Runs on CPU, ~90MB)
 # 'all-MiniLM-L6-v2' is standard, fast, and 384 dimensions.
@@ -26,8 +28,10 @@ client = Groq(api_key=GROQ_API_KEY)
 # But 'nomic' is unique. Let's stick to standard 384 dim model and advise user to recreate DB if needed.
 # Actually, pgvector definition in models.py says 768. 
 # We should use 'all-mpnet-base-v2' (768 dims) to match existing DB schema!
-print("Loading Embedding Model (this may take a moment)...")
-embed_model = SentenceTransformer('all-mpnet-base-v2') 
+logger = get_logger(__name__)
+
+logger.info("Loading embedding model (all-mpnet-base-v2)...")
+embed_model = SentenceTransformer('all-mpnet-base-v2')
 
 GUARDRAIL_PROMPT = """You are an educational AI assistant for kids. 
 You must ONLY answer questions related to school subjects (Math, Science, History, Coding, language, etc.).
@@ -40,10 +44,9 @@ Use Code blocks for code.
 
 def get_embedding(text: str) -> List[float]:
     try:
-        # Local inference
         return embed_model.encode(text).tolist()
     except Exception as e:
-        print(f"Embedding Error: {e}")
+        logger.error(f"Embedding error: {e}")
         return []
 
 def generate_response(kid_id: int, message: str, chat_history: List[dict], db: Session) -> str:
@@ -52,8 +55,19 @@ def generate_response(kid_id: int, message: str, chat_history: List[dict], db: S
     context_text = ""
     
     if query_vec:
-        # Cosine similarity search
-        results = db.query(Document).order_by(Document.embedding.cosine_distance(query_vec)).limit(2).all()
+        distance_expr = Document.embedding.cosine_distance(query_vec)
+        results = (
+            db.query(Document)
+            .join(ChatSession, Document.session_id == ChatSession.id)
+            .filter(
+                ChatSession.kid_id == kid_id,
+                Document.is_active == True,
+                distance_expr < RAG_DISTANCE_THRESHOLD,
+            )
+            .order_by(distance_expr)
+            .limit(RAG_TOP_K)
+            .all()
+        )
         relevant_docs = [doc.content for doc in results if doc.content]
         context_text = "\n".join(relevant_docs)
 
@@ -63,7 +77,7 @@ def generate_response(kid_id: int, message: str, chat_history: List[dict], db: S
     if context_text:
         messages_payload.append({"role": "system", "content": f"Use this context to answer if relevant:\n{context_text}"})
         
-    for msg in chat_history:
+    for msg in chat_history: # need to limit it to 20 messages
         role = "assistant" if msg['role'] == "ai" else msg['role']
         messages_payload.append({"role": role, "content": msg['content']})
         
@@ -73,13 +87,13 @@ def generate_response(kid_id: int, message: str, chat_history: List[dict], db: S
     try:
         chat_completion = client.chat.completions.create(
             messages=messages_payload,
-            model="llama-3.3-70b-versatile", # Fast and smart
+            model="llama-3.3-70b-versatile",
             temperature=0.5,
             max_tokens=500,
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
-        print(f"Groq API Error: {e}")
+        logger.error(f"Groq API error: {e}")
         return "I'm having trouble connecting to GroqCloud. Please check your API Key."
 
 def process_file_upload(file_path: str, session_id: int, db: Session):
@@ -97,7 +111,7 @@ def process_file_upload(file_path: str, session_id: int, db: Session):
         full_text, chunks = process_document(file_path, file_ext)
         
         if not chunks:
-            print(f"Warning: No text extracted from {file_path}")
+            logger.warning(f"No text extracted from {file_path}")
             return 0
         
         # Embed & Store in DB
@@ -117,13 +131,11 @@ def process_file_upload(file_path: str, session_id: int, db: Session):
                 processed_count += 1
                 
         db.commit()
-        print(f"Processed {processed_count} chunks from {file_path}")
+        logger.info(f"Processed {processed_count} chunks from {file_path}")
         return processed_count
-        
+
     except Exception as e:
-        print(f"File processing error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"File processing error for {file_path}")
         return 0
 
 def cleanup_expired_files(db: Session):

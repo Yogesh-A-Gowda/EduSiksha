@@ -1,0 +1,16 @@
+# Never bake secrets into the image
+.env.local
+.env.*.local
+
+# Installed by the build stage; must not shadow it
+node_modules/
+
+# Build output comes from the builder stage; don't copy stale local build
+.next/
+
+# Version control and editor noise
+.git
+.gitignore
+.vscode/
+.idea/
+*.md
